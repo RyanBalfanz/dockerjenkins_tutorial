@@ -1,47 +1,43 @@
-FROM debian:jessie
+FROM centos:7
 MAINTAINER Maxfield Stewart
 
-# Install all dependencies
-RUN echo 'deb http://httpredir.debian.org/debian jessie-backports main' > /etc/apt/sources.list.d/jessie-backports.list
+# Yum workaround to stalled mirror
+RUN sed -i -e 's/enabled=1/enabled=0/g' /etc/yum/pluginconf.d/fastestmirror.conf
 
-ENV LANG C.UTF-8
-ENV JAVA_VERSION 8u91
-ENV JAVA_DEBIAN_VERSION 8u91-b14-1~bpo8+1
+RUN rm -f /var/lib/rpm/__*
+RUN rpm --rebuilddb -v -v
+RUN yum clean all
+
 
 # see https://bugs.debian.org/775775
 # and https://github.com/docker-library/java/issues/19#issuecomment-70546872
 ENV CA_CERTIFICATES_JAVA_VERSION 20140324
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+RUN yum -v install -y \
     wget \
-    curl \
-    ca-certificates \
     zip \
     openssh-client \
     unzip \
-    openjdk-8-jdk="$JAVA_DEBIAN_VERSION" \
-    ca-certificates-java="$CA_CERTIFICATES_JAVA_VERSION" \
-    && rm -rf /var/lib/apt/lists/*
+    java-1.8.0-openjdk \
+    git \
+    && yum clean all
     
-RUN /var/lib/dpkg/info/ca-certificates-java.postinst configure
+#RUN /var/lib/dpkg/info/ca-certificates-java.postinst configure
 
 # Install Tini
-ENV TINI_SHA 066ad710107dc7ee05d3aa6e4974f01dc98f3888
+ENV TINI_VERSION 0.9.0
+ENV TINI_SHA fa23d1e20732501c3bb8eeeca423c89ac80ed452
 
 # Use tini as subreaper in Docker container to adopt zombie processes 
-RUN curl -fL https://github.com/krallin/tini/releases/download/v0.5.0/tini-static -o /bin/tini && chmod +x /bin/tini \
-  && echo "$TINI_SHA /bin/tini" | sha1sum -c -
+RUN curl -fsSL https://github.com/krallin/tini/releases/download/v${TINI_VERSION}/tini-static -o /bin/tini && chmod +x /bin/tini \
+  && echo "$TINI_SHA  /bin/tini" | sha1sum -c -
 
 # SET Jenkins Environment Variables
 ENV JENKINS_HOME /var/jenkins_home
 ENV JENKINS_SLAVE_AGENT_PORT 50000
-ENV JENKINS_VERSION 1.625.2
-ENV JENKINS_SHA 395fe6975cf75d93d9fafdafe96d9aab1996233b
+ENV JENKINS_VERSION 2.58
 ENV JENKINS_UC https://updates.jenkins-ci.org
 ENV COPY_REFERENCE_FILE_LOG $JENKINS_HOME/copy_reference_file.log
-ENV JAVA_OPTS="-Xmx8192m"
-ENV JENKINS_OPTS="--handlerCountStartup=100 --handlerCountMax=300 --logfile=/var/log/jenkins/jenkins.log  --webroot=/var/cache/jenkins/war"
 
 # Jenkins is run with user `jenkins`, uid = 1000
 # If you bind mount a volume from the host or a data container,
@@ -58,8 +54,10 @@ VOLUME /var/jenkins_home
 RUN mkdir -p /usr/share/jenkins/ref/init.groovy.d
 
 # Install Jenkins
-RUN curl -fL http://mirrors.jenkins-ci.org/war-stable/$JENKINS_VERSION/jenkins.war -o /usr/share/jenkins/jenkins.war \
-  && echo "$JENKINS_SHA /usr/share/jenkins/jenkins.war" | sha1sum -c -
+RUN curl -fL http://repo.jenkins-ci.org/public/org/jenkins-ci/main/jenkins-war/${JENKINS_VERSION}/jenkins-war-${JENKINS_VERSION}.war -o /usr/share/jenkins/jenkins.war
+
+ENV JAVA_OPTS="-Xmx8192m"
+ENV JENKINS_OPTS="--logfile=/var/log/jenkins/jenkins.log  --webroot=/var/cache/jenkins/war"
 
 # Prep Jenkins Directories
 RUN chown -R jenkins "$JENKINS_HOME" /usr/share/jenkins/ref
@@ -72,12 +70,16 @@ RUN chown -R jenkins:jenkins /var/cache/jenkins
 EXPOSE 8080
 EXPOSE 50000
 
-# Copy in local config filesfiles
+# Copy in local config files
 COPY init.groovy /usr/share/jenkins/ref/init.groovy.d/tcp-slave-agent-port.groovy
 COPY jenkins.sh /usr/local/bin/jenkins.sh
 COPY plugins.sh /usr/local/bin/plugins.sh
 RUN chmod +x /usr/local/bin/plugins.sh
 RUN chmod +x /usr/local/bin/jenkins.sh
+
+# Install default plugins
+COPY plugins.txt /tmp/plugins.txt
+RUN /usr/local/bin/plugins.sh /tmp/plugins.txt
 
 # Switch to the jenkins user
 USER jenkins
